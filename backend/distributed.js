@@ -45,7 +45,7 @@ export async function createDistributedRelay({ url = process.env.REDIS_URL, pref
       await limit(); if (socket.data.room) throw new Error('Leave your current room first.');
       const code = typeof raw === 'string' ? raw.toUpperCase().replace(/[\s-]/g, '') : '';
       const room = await attach(await rooms.join(code, socket.id));
-      // The ack must be processed before negotiation starts.
+      // Give the client time to process the join acknowledgement before negotiating.
       setTimeout(() => io.to(code).emit('paired'), 50).unref();
       return room;
     });

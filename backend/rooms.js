@@ -2,7 +2,7 @@ import { randomBytes, randomInt, createHash } from 'node:crypto';
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const digest = token => createHash('sha256').update(token).digest('hex');
-// One atomic Redis operation handles admission and token rotation. Expiry never extends.
+// Admission and session recovery are atomic; reconnecting preserves the original expiry.
 const update = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then return cjson.encode({error='Room not found or expired.'}) end

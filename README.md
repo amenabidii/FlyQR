@@ -1,51 +1,84 @@
 # FlyQR
 
-A temporary bridge between two devices: create a room, scan its QR code, and share files and messages without an account.
+**Scan. Send. Done.**
 
-## Run locally
+FlyQR shares files and messages between two devices without an account. One device creates a room; the other joins by scanning a QR code or entering an eight-character code.
 
-Install Node.js 22 or newer (including npm), then open a terminal in this folder:
+## Features
+
+- Two-device rooms with QR codes and manual joining
+- File transfers up to 100 MB, with progress and delivery confirmation
+- Direct WebRTC transfers with a Socket.IO relay fallback
+- Chat for short messages and links
+- Temporary rooms that expire after one hour
+- Shared rooms and automatic reconnection on Vercel with Redis
+
+## Local development
+
+Requires Node.js 22 or newer and npm.
 
 ```sh
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000 on your computer. Create a room, or enter an existing eight-character code. QR links prefill the code; tap the arrow to join.
+The development server runs at [localhost:3000](http://localhost:3000). Local development does not require Redis.
 
-### Test with your phone
+### Testing on a phone
 
-1. Put both devices on the same Wi-Fi.
-2. Find your computer's local IPv4 address (`ipconfig` on Windows).
-3. Open `http://YOUR-COMPUTER-IP:3000` **on the computer**, then create the room. This ensures the QR code points to an address the phone can reach.
-4. Scan the QR code with your phone. If Windows asks, allow Node.js through the firewall on your private network.
+Both devices must be connected to the same Wi-Fi network. Run `ipconfig` on Windows to find the computer's local IPv4 address, then open `http://<computer-ip>:3000` on the computer before creating a room. The QR code will then contain an address accessible from the phone.
 
-`localhost` always means the device you're using. Public Wi-Fi may block communication between devices; use a deployed HTTPS URL for the actual library use case. Clipboard copying may be unavailable on local HTTP; the QR code and manual code still work.
+Node.js must be allowed through the firewall on the private network. Some public Wi-Fi networks block connections between devices. A deployed HTTPS address works across networks. Clipboard access may be unavailable on local HTTP; QR codes and manual joining remain available.
 
-## Deploy on Vercel
+## Vercel deployment
 
-The frontend is static; `api/relay.js` is a WebSocket function. **Redis is required on Vercel** so devices can find the same room even when they connect to different function instances.
+Vercel serves the Vite frontend from `dist` and the WebSocket backend from `api/relay.js`. Redis shares room state and relay traffic across function instances.
 
-1. Import `amenabidii/FlyQR` from GitHub into Vercel. Use the **Vite** preset and Node.js **22.x**. The tracked `vercel.json` sets the install/build commands and output directory. Do not add a start command.
-2. Add a Redis database through [Vercel Marketplace](https://vercel.com/marketplace/redis/redis), or connect a compatible external Redis database. Select the free option only if offered and suitable for your usage. Redis Cloud has a free prototype tier. This app needs **TCP/TLS, Lua/EVAL and Pub/Sub**; a REST-only connection will not work.
-3. In Vercel **Settings → Environment Variables**, set `REDIS_URL` to your provider's full connection URL, for example `rediss://default:PASSWORD@HOST:PORT`. Use the provider's TLS configuration and URL-encode special characters in passwords. The example is not a real credential. Never put this value in source code or a `VITE_` variable. A provider integration may create it for you; verify the variable name.
-4. Enable **Fluid Compute**. The function duration is set to 300 seconds. Deploy (or redeploy after adding the variable).
-5. Open the public deployment URL on two devices, create/join a room, and send a file. Keep the room open for more than five minutes and send another message: the client should reconnect without discarding the room. Check Vercel logs for connection errors without sharing credentials.
+| Setting | Value |
+| --- | --- |
+| Framework preset | Vite |
+| Node.js version | 22.x |
+| Install command | `npm install --include=dev` |
+| Build command | `npm run build` |
+| Output directory | `dist` |
+| Fluid Compute | Enabled |
+| Function duration | 300 seconds |
 
-For public visitors, ensure production Deployment Protection does not require Vercel login. Preview deployments can remain protected. Use a separate Redis database for previews to isolate them from production.
+Build commands, routing and function duration are defined in `vercel.json`. Vercel does not require a start command.
 
-### How the Vercel backend works
+### Redis configuration
 
-- Redis stores only room membership, hashed resume tokens, expiration and rate-limit counters. An atomic Lua operation prevents two simultaneous joins from exceeding room capacity. Keys expire automatically after one hour; timers are not required to remove room records.
-- Socket.IO uses WebSocket transport only. The Redis Pub/Sub adapter forwards signals, chat and file chunks between function instances, including delivery acknowledgements. It does not write file payloads to Redis keys or disk; relay content passes through the Redis provider in transit.
-- Clients retain a private resume token in page memory, rotate the server connection at four minutes, and resume the same room. Refreshing the page loses the token; create a new room in that case. Keep both pages open.
-- Direct WebRTC transfers can continue during signaling reconnection. A relay transfer interrupted while a chunk is in flight may fail and must be resent; it is never silently marked delivered. Completed downloads remain available through a successful reconnect.
-- Closing the room invalidates its Redis record immediately. An offline device discovers closure when it reconnects. Disconnected devices keep their reserved slot until room expiry, allowing reconnection.
-- Free plans have bandwidth, command, connection and compute quotas. A 100 MB relay transfer involves thousands of chunks and Redis operations. Free hosting is **not unlimited file sharing**. Monitor both Vercel and Redis usage; file relay traffic consumes their allowances. Direct WebRTC reduces that traffic.
+The backend requires a Redis connection with TCP/TLS, Lua/EVAL and Pub/Sub support. REST-only endpoints are not compatible. Redis can be connected through the [Vercel Marketplace](https://vercel.com/marketplace/redis/redis) or an external provider.
 
-References: [Vercel WebSockets and Socket.IO](https://vercel.com/docs/functions/websockets), [function duration](https://vercel.com/docs/functions/configuring-functions/duration), [Redis Cloud free database](https://redis.io/docs/latest/operate/rc/rc-quickstart/).
+Add `REDIS_URL` under **Settings → Environment Variables** before deployment:
 
-## Run a standalone production server
+```text
+rediss://default:<password>@<host>:<port>
+```
+
+The URL must match the provider's TLS settings, with special characters in passwords URL-encoded. `REDIS_URL` is a server-only secret and must not use the `VITE_` prefix. Environment changes require a redeployment. Preview and production deployments should use separate Redis databases.
+
+Public deployments must allow visitors without a Vercel login. Preview deployments can remain protected.
+
+### Deployment verification
+
+Create a room from the public URL and join from a second device. Check messages, file downloads and room closure. Leave the room open for more than five minutes, then send another message to verify connection recovery. Connection errors appear in the Vercel function logs.
+
+### Room storage and reconnection
+
+Redis stores room membership, hashed resume tokens, expiry timestamps and rate-limit counters. Atomic Lua operations enforce the two-device limit. Room keys expire after one hour without relying on a running server timer.
+
+The Socket.IO Redis adapter forwards signaling, messages, file chunks and delivery acknowledgements between function instances. File payloads pass through Redis Pub/Sub in transit; they are not saved as Redis keys or written to disk by FlyQR.
+
+The browser retains a private resume token in page memory and renews the server connection every four minutes. Room membership survives reconnection, but a page refresh loses the token. Disconnected devices retain their reserved slot until the room expires. Closing a room deletes its Redis record immediately; offline devices discover the closure when they reconnect.
+
+Direct WebRTC transfers can continue during signaling reconnection. An interrupted relay transfer may need to be resent. Completed files remain available after a successful reconnect.
+
+### Hosting limits
+
+Vercel and Redis quotas apply separately. Relay traffic consumes bandwidth and Redis operations; a 100 MB file requires thousands of chunks. Direct transfers reduce server traffic. Free tiers are suitable for limited usage, not unlimited file sharing.
+
+## Standalone hosting
 
 ```sh
 npm install
@@ -53,35 +86,49 @@ npm run build
 npm start
 ```
 
-Without `REDIS_URL`, this runs as **one persistent Node.js service** behind HTTPS, with WebSocket support. Set `PORT` if your host requires it (default 3000). Build command: `npm install && npm run build`; start command: `npm start`. With `REDIS_URL`, the standalone server uses the same distributed backend as Vercel. The included Dockerfile is another deployment option. Uploading only `dist` won't run the room server. No Redis account or paid service is needed for local single-server use.
+The server listens on `PORT`, defaulting to `3000`. Production hosting requires HTTPS and WebSocket support. A Dockerfile is included.
 
-## Behavior and limits
+Without `REDIS_URL`, rooms are held in one Node.js process and close when either device disconnects. With `REDIS_URL`, the standalone server uses the distributed backend. Static hosting of `dist` alone does not provide room creation or transfers.
 
-- React + Vite frontend; Express + Socket.IO server; QR codes generated locally.
-- Two devices per room. Random eight-character codes, one-hour expiry, and rate-limited room attempts. Anyone with the code can join until the room is full; share codes only with your own device.
-- Files use an ordered WebRTC data channel when available. Google STUN helps establish the connection. If direct connectivity is unavailable, file chunks use the Socket.IO server relay instead. TURN is not required for that fallback.
-- 100 MB per file. Files are chunked with backpressure; the receiving browser confirms completion. Keep both pages open and phones awake. Failed transfers must be resent; there is no resume across disconnections.
-- Chat and file relay traffic use HTTPS/WSS when deployed with HTTPS. **Relay traffic is not end-to-end encrypted**; the server and Redis Pub/Sub provider process bytes in transit. File content is never written to disk by this application. Direct WebRTC channels are encrypted by the browser.
-- Received files live in browser memory until the room closes. Download them before leaving. Closing a room revokes download links and clears the interface; it does not remove files already saved to a computer.
-- In local mode without Redis, disconnecting either device ends the room and server restarts erase rooms. In Vercel/Redis mode, rooms survive socket disconnects and process restarts until their original expiry.
-- Before a large public launch, add reverse-proxy connection/bandwidth limits, abuse monitoring, and load testing. Current room-attempt limits use the direct connection IP, which may group users behind a reverse proxy.
+For local development with Redis, set `REDIS_URL` in the environment or create a private `.env` file based on `.env.example`:
 
-## Checks
+```sh
+node --env-file=.env server.js --dev
+```
+
+## Privacy and transfer behavior
+
+- Anyone with a room code can join while a slot is available.
+- QR codes are generated in the browser. Google STUN assists direct WebRTC connections.
+- Files use ordered chunks with backpressure. Delivery is confirmed by the receiving browser.
+- Both pages must remain open during a transfer. Interrupted files do not support partial-transfer resume.
+- Direct WebRTC traffic is encrypted by the browser. Relay traffic uses HTTPS/WSS in production but is not end-to-end encrypted: the server and Redis provider process bytes in transit.
+- Received files remain in browser memory until the room closes. Closing a room revokes its download links but does not delete files already saved to the device.
+- Room-attempt limits use the forwarded client IP on Vercel and the direct connection IP on standalone servers. Standalone reverse proxies may group visitors under one address.
+- Large public deployments need additional connection and bandwidth controls, abuse monitoring and load testing.
+
+## Tests
 
 ```sh
 npm test
 npm run build
 ```
 
-Tests exercise real Socket.IO clients for pairing, room capacity, relay byte integrity, unauthorized relay rejection, expiry, disconnect cleanup, and rate limiting. For browser validation, use two tabs/devices to send a message, a file, and an empty file both ways; verify downloaded bytes and end-room cleanup. Use a mobile viewport and test both direct and relay modes.
+The base suite covers pairing, capacity, binary relay integrity, unauthorized access, expiry, disconnect cleanup and rate limiting.
 
-Distributed tests are skipped unless `TEST_REDIS_URL` points to a local/test Redis database. They create isolated short-lived keys and run two separate relay servers, exercising concurrent admission, cross-server binary delivery, forged token rejection, reconnects, expiry and automatic connection rotation. In PowerShell:
+Distributed tests require `TEST_REDIS_URL`. They run two relay servers against isolated, short-lived Redis keys and cover concurrent joins, cross-server transfers, invalid resume tokens, reconnection, URL routing and connection rotation. Without that variable, distributed tests are skipped.
 
 ```powershell
 $env:TEST_REDIS_URL='redis://127.0.0.1:6379'
 node --test
 ```
 
-For a local distributed preview, set `REDIS_URL` in your terminal, then run `npm run dev`. Alternatively use `node --env-file=.env server.js --dev` with a private `.env` file based on `.env.example`.
+Browser checks cover both transfer directions, empty files, downloaded byte integrity, mobile layouts and end-room cleanup.
 
-Protocol references: [Socket.IO server options](https://socket.io/docs/v4/server-options/) and [WebRTC data-channel buffering](https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/bufferedAmount).
+## References
+
+- [Vercel WebSockets](https://vercel.com/docs/functions/websockets)
+- [Vercel function duration](https://vercel.com/docs/functions/configuring-functions/duration)
+- [Redis Cloud setup](https://redis.io/docs/latest/operate/rc/rc-quickstart/)
+- [Socket.IO server options](https://socket.io/docs/v4/server-options/)
+- [WebRTC data-channel buffering](https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/bufferedAmount)

@@ -62,7 +62,7 @@ export function createRelay({ ttl = 3600000, path = '/socket.io' } = {}) {
       const room = rooms.get(socket.data.code);
       if (!room || room.members.length !== 2) return reply(ack, { error: 'The other device is not connected.' });
       if (!packet || !['chat', 'start', 'chunk', 'finish', 'received', 'cancel'].includes(packet.type)) return reply(ack, { error: 'Invalid packet.' });
-      // Acknowledge only after the receiving browser has processed this packet.
+      // Delivery acknowledgements come from the receiving browser.
       socket.to(socket.data.code).timeout(15000).emit('packet', packet, (error, responses) => {
         reply(ack, error ? { error: 'The other device did not respond.' } : responses[0] || { ok: true });
       });
