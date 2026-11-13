@@ -18,7 +18,7 @@ FlyQR shares files and messages between two devices without an account. One devi
 Requires Node.js 22 or newer and npm.
 
 ```sh
-npm install
+npx --yes pnpm@11.25.0 install --frozen-lockfile
 npm run dev
 ```
 
@@ -38,13 +38,13 @@ Vercel serves the Vite frontend from `dist` and the WebSocket backend from `api/
 | --- | --- |
 | Framework preset | Vite |
 | Node.js version | 22.x |
-| Install command | `npm install --include=dev` |
+| Install command | `npx --yes pnpm@11.25.0 install --frozen-lockfile --prod=false` |
 | Build command | `npm run build` |
 | Output directory | `dist` |
 | Fluid Compute | Enabled |
 | Function duration | 300 seconds |
 
-Build commands, routing and function duration are defined in `vercel.json`. Vercel does not require a start command.
+Build commands, routing and function duration are defined in `vercel.json`. Vercel does not require a start command. Dependencies are installed with pnpm 11.25.0 and the committed lockfile. The frozen install prevents deployment from resolving a different dependency tree. Any dashboard install-command override should match the command above.
 
 ### Redis configuration
 
@@ -87,7 +87,7 @@ Analytics URLs exclude query strings and fragments, including room codes. File c
 ## Standalone hosting
 
 ```sh
-npm install
+npx --yes pnpm@11.25.0 install --frozen-lockfile
 npm run build
 npm start
 ```
