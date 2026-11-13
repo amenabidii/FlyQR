@@ -4,10 +4,10 @@ import { randomInt } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { Server } from 'socket.io';
 
-export function createRelay({ ttl = 3600000 } = {}) {
+export function createRelay({ ttl = 3600000, path = '/socket.io' } = {}) {
   const app = express();
   const http = createServer(app);
-  const io = new Server(http, { maxHttpBufferSize: 100000, serveClient: false });
+  const io = new Server(http, { path, maxHttpBufferSize: 100000, serveClient: false });
   const rooms = new Map();
   const attempts = new Map();
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -54,8 +54,9 @@ export function createRelay({ ttl = 3600000 } = {}) {
       reply(ack, { code, expires: room.expires, host: false });
       io.to(code).emit('paired');
     });
-    socket.on('signal', data => {
+    socket.on('signal', (data, ack) => {
       if (socket.data.code && data && JSON.stringify(data).length < 20000) socket.to(socket.data.code).emit('signal', data);
+      reply(ack, { ok: true });
     });
     socket.on('packet', (packet, ack) => {
       const room = rooms.get(socket.data.code);
@@ -66,7 +67,7 @@ export function createRelay({ ttl = 3600000 } = {}) {
         reply(ack, error ? { error: 'The other device did not respond.' } : responses[0] || { ok: true });
       });
     });
-    socket.on('end', () => close(socket.data.code, 'The room was closed.'));
+    socket.on('end', (_, ack) => { close(socket.data.code, 'The room was closed.'); reply(ack, { ok: true }); });
     socket.on('disconnect', () => close(socket.data.code, 'A device disconnected. Create a new room to reconnect.'));
   });
   http.on('close', () => { clearInterval(sweep); for (const r of rooms.values()) clearTimeout(r.timer); });
@@ -75,7 +76,10 @@ export function createRelay({ ttl = 3600000 } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { app, http } = createRelay();
+  const path = process.argv.includes('--dev') ? '/socket.io' : '/api/relay/socket.io';
+  const { app, http } = process.env.REDIS_URL
+    ? await (await import('./backend/distributed.js')).createDistributedRelay({ path })
+    : createRelay({ path });
   app.use((_, res, next) => { res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
   if (process.argv.includes('--dev')) {
     const { createServer: createVite } = await import('vite');
