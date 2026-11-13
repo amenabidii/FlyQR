@@ -1,6 +1,7 @@
 import { newId } from './id';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Analytics } from '@vercel/analytics/react';
 import QRCode from 'qrcode';
 import { ArrowUpRight, ArrowRight, ArrowLeft, Upload, Download, FileText, X, Copy, Check, Send, Smartphone, Monitor, ShieldCheck, Zap, Link, Plus } from 'lucide-react';
 import { connect } from './connection';
@@ -53,4 +54,11 @@ function App() {
     <footer><span>Made with <span className="heart">♥</span> by <a href="https://github.com/amenabidii" target="_blank" rel="noreferrer">Amen</a></span></footer>
   </div>;
 }
-createRoot(document.getElementById('root')).render(<App/>);
+function analyticsPageview(event) {
+  const url = new URL(event.url);
+  url.hash = '';
+  url.search = '';
+  return { ...event, url: url.toString() };
+}
+
+createRoot(document.getElementById('root')).render(<><App/>{import.meta.env.PROD && <Analytics beforeSend={analyticsPageview}/>}</>);

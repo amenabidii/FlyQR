@@ -78,6 +78,12 @@ Direct WebRTC transfers can continue during signaling reconnection. An interrupt
 
 Vercel and Redis quotas apply separately. Relay traffic consumes bandwidth and Redis operations; a 100 MB file requires thousands of chunks. Direct transfers reduce server traffic. Free tiers are suitable for limited usage, not unlimited file sharing.
 
+## Web Analytics
+
+Vercel Web Analytics is included in production builds through `@vercel/analytics/react`. Enable Web Analytics in the Vercel project dashboard, deploy, then visit the production URL to start collecting page views. Content blockers can prevent collection.
+
+Analytics URLs exclude query strings and fragments, including room codes. File contents, filenames and chat messages are not sent as custom events. Support, About and Contact are overlays on the same page, not separate page routes.
+
 ## Standalone hosting
 
 ```sh
