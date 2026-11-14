@@ -14,7 +14,7 @@ test('browser transport fallback transfers chunked bytes, empty files and chat b
     const c = connect({ online() {}, paired() {}, mode() {}, error(e) { throw new Error(e); }, ended() {}, message(m) { messages.push(m); }, file(f) { files.set(f.id, { ...files.get(f.id), ...f }); } }, url);
     clients.push(c); return { c, files, messages };
   }
-  const a = device(), b = device(); const room = await a.c.enter(); await b.c.enter(room.code);
+  const a = device(), b = device(); const room = await a.c.enter(); const guest = await b.c.enter(room.code); a.c.selectRecipient(guest.memberId); await new Promise(r => setTimeout(r,30));
   const data = Uint8Array.from({ length: 100000 }, (_, i) => i % 256);
   await a.c.sendFile(new File([data], 'binary.dat'));
   const received = [...b.files.values()][0]; assert.equal(received.done, true);

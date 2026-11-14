@@ -3,149 +3,91 @@ import { io } from 'socket.io-client';
 export const MAX_FILE = 100 * 1024 * 1024;
 export function connect(events, serverUrl, options = {}) {
   const socket = io(serverUrl, { autoConnect: false, transports: ['websocket'], path: options.path || (!serverUrl && import.meta.env?.PROD ? '/api/relay' : '/socket.io') });
-  let ready = false;
-  let generation = 0;
-  let peer, channel, room, incoming, disposed = false;
-  let candidates = [];
-  const urls = new Set();
-  const receipts = new Map();
-  const emit = (event, data) => new Promise((resolve, reject) => socket.timeout(20000).emit(event, data, (err, result) => err || result?.error ? reject(new Error(result?.error || 'Connection interrupted. Please resend.')) : resolve(result)));
+  let ready = false, room, disposed = false, recipient;
+  const pending = new Map(), incoming = new Map(), urls = new Set();
+  const emit = (event, data) => new Promise((resolve, reject) => socket.timeout(20000).emit(event, data, (error, result) => error || result?.error ? reject(new Error(result?.error || 'Connection interrupted. Please try again.')) : resolve(result)));
   async function request(event, data) {
-    const startedIn = generation;
     const deadline = Date.now() + 20000;
-    while (!ready) {
-      if (disposed || startedIn !== generation || Date.now() > deadline) throw new Error('Connection unavailable. Please try again.');
-      await new Promise(r => setTimeout(r, 50));
-    }
-    if (disposed || startedIn !== generation) throw new Error('Room closed.');
+    while (!ready && !disposed && Date.now() < deadline) await new Promise(r => setTimeout(r, 40));
+    if (!ready || disposed) throw new Error('Connection unavailable.');
     return emit(event, data);
   }
-  async function relayPacket(packet) {
-    const deliveryId = newId();
-    const payload = packet.type === 'chunk' ? { ...packet, data: btoa(String.fromCharCode(...new Uint8Array(packet.data))) } : packet;
-    let timer;
-    const confirmed = new Promise((resolve, reject) => {
-      receipts.set(deliveryId, { resolve, reject });
-      timer = setTimeout(() => reject(new Error('Transfer confirmation timed out. Please resend.')), 20000);
-    });
-    confirmed.catch(() => {});
-    try { await request('signal', { deliveryId, payload }); await confirmed; }
-    finally { clearTimeout(timer); receipts.delete(deliveryId); }
-  }
   function cleanup() {
-    generation++;
-    peer?.close(); peer = null; channel = null; candidates = []; incoming = null; room = null;
-    for (const item of receipts.values()) item.reject(new Error('Room closed.'));
-    receipts.clear();
+    room = null; recipient = null;
+    for (const entry of pending.values()) entry.reject(new Error('Room closed.'));
+    pending.clear(); incoming.clear();
     for (const url of urls) URL.revokeObjectURL(url);
     urls.clear();
   }
-  async function receive(packet) {
-    if (!packet || typeof packet !== 'object') throw new Error('Invalid data.');
+  function members(list) {
+    if (room) room.members = list;
+    events.members?.(list);
+    events.paired(list.length > 1);
+    events.mode('Server relay');
+  }
+  function destination() {
+    if (!room) throw new Error('Join a room first.');
+    const target = room.host ? room.members?.find(m => !m.host && m.id === recipient) : room.members?.find(m => m.host);
+    if (!target) throw new Error('Choose a connected guest first.');
+    return target.id;
+  }
+  async function deliver(payload, to) {
+    const id = newId(); let timer;
+    const receipt = new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject, from: to });
+      timer = setTimeout(() => reject(new Error('Delivery confirmation unavailable. Please check the receiving device.')), 20000);
+    });
+    receipt.catch(() => {});
+    try { await request('signal', { to, deliveryId: id, payload }); await receipt; }
+    finally { clearTimeout(timer); pending.delete(id); }
+  }
+  async function receive(packet, from, sender) {
+    const key = from + ':' + packet.id;
     if (packet.type === 'chat') {
-      if (typeof packet.text !== 'string' || packet.text.length > 4000) throw new Error('Message is too long.');
-      events.message({ text: packet.text, mine: false, id: newId() });
-    } else if (packet.type === 'start') {
-      if (incoming || !Number.isSafeInteger(packet.size) || packet.size < 0 || packet.size > MAX_FILE || typeof packet.name !== 'string' || packet.name.length > 255) throw new Error('Cannot accept this file.');
-      incoming = { ...packet, chunks: [], bytes: 0 };
-      events.file({ id: packet.id, name: packet.name, size: packet.size, progress: 0, mine: false });
-    } else if (packet.type === 'chunk') {
-      if (!incoming || incoming.id !== packet.id) throw new Error('Transfer no longer available.');
-      const raw = packet.data;
-      const data = ArrayBuffer.isView(raw) ? raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) : raw;
-      if (!(data instanceof ArrayBuffer) || data.byteLength > 32768 || incoming.bytes + data.byteLength > incoming.size) throw new Error('Invalid file chunk.');
-      incoming.chunks.push(data); incoming.bytes += data.byteLength;
-      events.file({ id: incoming.id, progress: incoming.size ? Math.round(incoming.bytes / incoming.size * 100) : 100 });
-    } else if (packet.type === 'finish') {
-      if (!incoming || incoming.id !== packet.id || incoming.bytes !== incoming.size) throw new Error('Incomplete file. Please resend it.');
-      const url = URL.createObjectURL(new Blob(incoming.chunks, { type: 'application/octet-stream' }));
-      urls.add(url); events.file({ id: incoming.id, url, progress: 100, done: true }); incoming = null;
-      await relayPacket({ type: 'received', id: packet.id });
-    } else if (packet.type === 'received') {
-      receipts.get(packet.id)?.resolve(); receipts.delete(packet.id);
-    } else if (packet.type === 'cancel') {
-      if (incoming?.id === packet.id) { events.file({ id: incoming.id, error: 'Transfer interrupted. Please resend.' }); incoming = null; }
+      if (typeof packet.text !== 'string' || packet.text.length > 4000) throw new Error('Invalid note.');
+      events.message({ id: newId(), text: packet.text, sender, mine: false }); return;
     }
-  }
-  function bind(dc) {
-    channel = dc; dc.binaryType = 'arraybuffer';
-    dc.onopen = () => events.mode('Direct connection');
-    dc.onclose = () => events.mode('Server relay');
-    dc.onmessage = event => {
-      try {
-        const packet = typeof event.data === 'string' ? JSON.parse(event.data) : { type: 'chunk', id: incoming?.id, data: event.data };
-        receive(packet).catch(error => events.error(error.message));
-      } catch { events.error('Invalid transfer data. Please resend.'); }
-    };
-  }
-  function setupPeer() {
-    if (peer) return peer;
-    peer = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-    peer.onicecandidate = e => { if (e.candidate) request('signal', { candidate: e.candidate.toJSON() }).catch(() => {}); };
-    peer.ondatachannel = e => bind(e.channel);
-    return peer;
+    if (packet.type === 'start') {
+      if (incoming.has(key) || incoming.size >= 4 || !Number.isSafeInteger(packet.size) || packet.size < 0 || packet.size > MAX_FILE || typeof packet.name !== 'string' || packet.name.length > 255) throw new Error('Cannot accept this file.');
+      incoming.set(key, { ...packet, chunks: [], bytes: 0 });
+      events.file({ id: key, name: packet.name, size: packet.size, sender, progress: 0, mine: false }); return;
+    }
+    const file = incoming.get(key);
+    if (!file) throw new Error('Transfer no longer available. Please resend.');
+    if (packet.type === 'cancel') { incoming.delete(key); events.file({ id: key, error: 'Transfer interrupted.' }); return; }
+    if (packet.type === 'chunk') {
+      if (typeof packet.data !== 'string' || packet.data.length > 44000) throw new Error('Invalid chunk.');
+      const data = Uint8Array.from(atob(packet.data), c => c.charCodeAt(0));
+      if (data.length > 32768 || file.bytes + data.length > file.size) throw new Error('Invalid chunk size.');
+      file.chunks.push(data); file.bytes += data.length;
+      events.file({ id: key, progress: file.size ? Math.min(99, Math.round(file.bytes / file.size * 100)) : 0 }); return;
+    }
+    if (packet.type === 'finish') {
+      if (file.bytes !== file.size) throw new Error('Incomplete file.');
+      const url = URL.createObjectURL(new Blob(file.chunks, { type: 'application/octet-stream' }));
+      urls.add(url); incoming.delete(key); events.file({ id: key, url, progress: 100, done: true }); return;
+    }
+    throw new Error('Invalid transfer packet.');
   }
   socket.on('signal', async data => {
-    if (data?.deliveryReceipt) {
-      const pending = receipts.get(data.deliveryReceipt);
-      if (data.error) pending?.reject(new Error(data.error)); else pending?.resolve();
-      receipts.delete(data.deliveryReceipt); return;
-    }
-    if (data?.deliveryId && data?.payload) {
-      let error;
-      try {
-        const packet = data.payload;
-        if (packet.type === 'chunk') packet.data = Uint8Array.from(atob(packet.data), char => char.charCodeAt(0)).buffer;
-        await receive(packet);
-      } catch (e) { error = e.message; }
-      request('signal', { deliveryReceipt: data.deliveryId, error }).catch(() => {});
+    if (data.deliveryReceipt) {
+      const entry = pending.get(data.deliveryReceipt);
+      if (entry?.from !== data.from) return;
+      if (data.error) entry.reject(new Error(data.error)); else entry.resolve();
       return;
     }
-    if (data?.chatReceipt) {
-      receipts.get(data.chatReceipt)?.resolve(); receipts.delete(data.chatReceipt); return;
-    }
-    if (data?.chat) {
-      try {
-        await receive({ type: 'chat', text: data.chat.text });
-        request('signal', { chatReceipt: data.chat.id }).catch(() => {});
-      } catch (error) { events.error(error.message); }
-      return;
-    }
-    try {
-      const pc = setupPeer();
-      if (data.description) {
-        await pc.setRemoteDescription(data.description);
-        for (const candidate of candidates) await pc.addIceCandidate(candidate);
-        candidates = [];
-        if (data.description.type === 'offer') { await pc.setLocalDescription(await pc.createAnswer()); request('signal', { description: pc.localDescription }).catch(() => {}); }
-      } else if (data.candidate) {
-        if (pc.remoteDescription) await pc.addIceCandidate(data.candidate); else candidates.push(data.candidate);
-      }
-    } catch { events.mode('Server relay'); }
+    if (!data.deliveryId || !data.payload) return;
+    let error;
+    try { await receive(data.payload, data.from, data.senderName); } catch (e) { error = e.message; }
+    request('signal', { to: data.from, deliveryReceipt: data.deliveryId, error }).catch(() => {});
   });
-  socket.on('paired', async () => {
-    events.paired(); events.mode(channel?.readyState === 'open' ? 'Direct connection' : 'Server relay');
-    try {
-      if (room?.host && !peer) { const pc = setupPeer(); bind(pc.createDataChannel('files')); await pc.setLocalDescription(await pc.createOffer()); request('signal', { description: pc.localDescription }).catch(() => {}); }
-    } catch { /* Relay works without WebRTC. */ }
-  });
-  socket.on('packet', (packet, ack) => { receive(packet).then(() => ack({ ok: true })).catch(e => ack({ error: e.message })); });
+  socket.on('members', members);
   socket.on('ended', reason => { socket.emit('release'); cleanup(); events.ended(reason); });
-  socket.on('disconnect', () => {
-    ready = false; events.online(false);
-    if (room?.token) events.mode('Reconnecting…');
-    else if (room) { cleanup(); events.ended('Connection lost. Please create or join a new room.'); }
-  });
+  socket.on('disconnect', () => { ready = false; events.online(false); });
   socket.on('connect', async () => {
     try {
-      if (room?.token) {
-        const previous = room;
-        const restored = await emit('resume', { code: previous.code, token: previous.token });
-        if (room === previous) room = restored;
-        else socket.emit('release');
-      }
+      if (room?.token) { room = await emit('resume', { code: room.code, token: room.token }); members(room.members); }
       ready = true; events.online(true);
-      if (room) events.mode(channel?.readyState === 'open' ? 'Direct connection' : 'Server relay');
     } catch (error) { cleanup(); ready = true; events.online(true); events.ended(error.message); }
   });
   socket.on('rotate', () => { socket.disconnect(); socket.connect(); });
@@ -153,48 +95,27 @@ export function connect(events, serverUrl, options = {}) {
   socket.connect();
   return {
     async feedback(message) { return request('feedback', message); },
-    async enter(code) { room = await request(code ? 'join' : 'create', code || null); return room; },
-    async end() { await request('end', null); cleanup(); },
-    async chat(text) {
-      const id = newId();
-      let timer;
-      const delivered = new Promise((resolve, reject) => {
-        receipts.set(id, { resolve, reject });
-        timer = setTimeout(() => reject(new Error('Delivery confirmation unavailable. The message may have arrived.')), 20000);
-      });
-      delivered.catch(() => {});
-      try { await request('signal', { chat: { id, text } }); await delivered; }
-      finally { clearTimeout(timer); receipts.delete(id); }
-    },
+    async enter(code, name = '') { room = await request(code ? 'join' : 'create', code ? { code, name } : null); members(room.members || []); return room; },
+    selectRecipient(id) { recipient = id; },
+    async kick(id) { await request('kick', id); },
+    async end() { await request('leave', null); cleanup(); },
+    async chat(text) { await deliver({ type: 'chat', text }, destination()); },
     async sendFile(file) {
       if (file.size > MAX_FILE) throw new Error('Files can be up to 100 MB.');
-      const id = newId();
-      const direct = channel?.readyState === 'open' ? channel : null;
-      const send = async packet => {
-        if (!room || disposed) throw new Error('Room closed.');
-        if (!direct) return relayPacket(packet);
-        const deadline = Date.now() + 20000;
-        while (direct.bufferedAmount > 262144) { if (Date.now() > deadline || direct.readyState !== 'open') throw new Error('Transfer interrupted. Please resend.'); await new Promise(r => setTimeout(r, 20)); }
-        if (direct.readyState !== 'open') throw new Error('Transfer interrupted. Please resend.');
-        direct.send(packet.type === 'chunk' ? packet.data : JSON.stringify(packet));
-      };
+      const to = destination(), id = newId();
       events.file({ id, name: file.name, size: file.size, mine: true, progress: 0 });
-      let timer;
-      const receipt = new Promise((resolve, reject) => { receipts.set(id, { resolve, reject }); timer = setTimeout(() => reject(new Error('Delivery confirmation timed out.')), 120000); });
-      receipt.catch(() => {});
       try {
-        await send({ type: 'start', id, name: file.name, size: file.size });
+        await deliver({ type: 'start', id, name: file.name, size: file.size }, to);
         for (let offset = 0; offset < file.size; offset += 32768) {
-          await send({ type: 'chunk', id, data: await file.slice(offset, offset + 32768).arrayBuffer() });
-          events.file({ id, progress: Math.min(99, Math.round((offset + 32768) / file.size * 100)) });
+          const bytes = new Uint8Array(await file.slice(offset, offset + 32768).arrayBuffer());
+          await deliver({ type: 'chunk', id, data: btoa(String.fromCharCode(...bytes)) }, to);
+          events.file({ id, progress: Math.min(99, Math.round((offset + bytes.length) / file.size * 100)) });
         }
-        await send({ type: 'finish', id }); await receipt;
-        events.file({ id, progress: 100, done: true });
+        await deliver({ type: 'finish', id }, to); events.file({ id, progress: 100, done: true });
       } catch (error) {
         events.file({ id, error: error.message });
-        if (room) relayPacket({ type: 'cancel', id }).catch(() => {});
-        throw error;
-      } finally { clearTimeout(timer); receipts.delete(id); }
+        deliver({ type: 'cancel', id }, to).catch(() => {}); throw error;
+      }
     },
     destroy() { disposed = true; cleanup(); socket.disconnect(); }
   };

@@ -10,19 +10,38 @@ local r = cjson.decode(raw)
 local action = ARGV[1]
 local token = ARGV[2]
 local socket = ARGV[3]
+local name = ARGV[4]
+local target = ARGV[5]
 local member = nil
 for i,m in ipairs(r.members) do if m.token == token then member = m end end
 if action == 'join' then
-  if #r.members >= 2 then return cjson.encode({error='This room already has two devices.'}) end
-  member = {token=token, socket=socket, host=false}
+  if #r.members >= 5 then return cjson.encode({error='This room is full (5 devices).'}) end
+  r.guestCount = (r.guestCount or 0) + 1
+  if name == '' then name = 'Guest ' .. r.guestCount end
+  member = {token=token, socket=socket, host=false, name=name}
   table.insert(r.members, member)
 else
   if not member then return cjson.encode({error='Invalid room credential.'}) end
   if action == 'resume' then member.socket = socket
   elseif member.socket ~= socket then return cjson.encode({error='This connection has been replaced.'}) end
 end
+if action == 'kick' then
+  if not member.host then return cjson.encode({error='Only the host can remove guests.'}) end
+  for i,m in ipairs(r.members) do
+    if m.socket == target then
+      if m.host then return cjson.encode({error='Cannot remove the host.'}) end
+      table.remove(r.members, i)
+      break
+    end
+  end
+end
+if action == 'leave' then
+  if member.host then action = 'end'
+  else for i,m in ipairs(r.members) do if m.token == token then table.remove(r.members,i) break end end end
+end
+if action == 'end' and not member.host then return cjson.encode({error='Only the host can close the room.'}) end
 if action == 'end' then redis.call('DEL', KEYS[1])
-elseif action == 'join' or action == 'resume' then
+elseif action == 'join' or action == 'resume' or action == 'kick' or action == 'leave' then
   redis.call('SET', KEYS[1], cjson.encode(r), 'KEEPTTL')
 end
 return cjson.encode({room=r, host=member.host})
@@ -40,20 +59,20 @@ export class RedisRooms {
     const expires = Date.now() + this.ttl;
     for (let i = 0; i < 5; i++) {
       const code = Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join('');
-      const room = { code, expires, members: [{ token: digest(token), socket, host: true }] };
+      const room = { code, expires, members: [{ token: digest(token), socket, host: true, name: 'Host' }] };
       if (await this.redis.set(this.prefix + 'room:' + code, JSON.stringify(room), { NX: true, PX: this.ttl })) return { code, token, expires, host: true };
     }
     throw new Error('Could not create a room. Try again.');
   }
-  async act(action, code, token, socket) {
+  async act(action, code, token, socket, name = '', target = '') {
     if (!/^[A-Z2-9]{4}$/.test(code || '') || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid room credential.');
-    const result = JSON.parse(await this.redis.eval(update, { keys: [this.prefix + 'room:' + code], arguments: [action, digest(token), socket] }));
+    const result = JSON.parse(await this.redis.eval(update, { keys: [this.prefix + 'room:' + code], arguments: [action, digest(token), socket, name, target] }));
     if (result.error) throw new Error(result.error);
     return result;
   }
-  async join(code, socket) {
+  async join(code, socket, name = '') {
     const token = randomBytes(32).toString('hex');
-    const { room } = await this.act('join', code, token, socket);
+    const { room } = await this.act('join', code, token, socket, String(name).trim().slice(0, 30));
     return { code, token, expires: room.expires, host: false };
   }
 }

@@ -2,7 +2,7 @@
 
 **Scan. Send. Done.**
 
-FlyQR shares files and messages between two devices without an account. One device creates a room; the other joins by scanning a QR code or entering an eight-character code.
+FlyQR shares files and messages between up to five devices without an account. One device creates a room; the other joins by scanning a QR code or entering an eight-character code.
 
 ## Features
 
@@ -66,7 +66,7 @@ Create a room from the public URL and join from a second device. Check messages,
 
 ### Room storage and reconnection
 
-Redis stores room membership, hashed resume tokens, expiry timestamps and rate-limit counters. Atomic Lua operations enforce the two-device limit. Room keys expire after 20 minutes without relying on a running server timer.
+Redis stores room membership, hashed resume tokens, expiry timestamps and rate-limit counters. Atomic Lua operations enforce the five-device limit. Room keys expire after 20 minutes without relying on a running server timer.
 
 The Socket.IO Redis adapter forwards signaling, messages, file chunks and delivery acknowledgements between function instances. File payloads pass through Redis Pub/Sub in transit; they are not saved as Redis keys or written to disk by FlyQR.
 
@@ -142,3 +142,7 @@ Browser checks cover both transfer directions, empty files, downloaded byte inte
 ### Feedback
 
 Feedback is stored privately in the connected Redis database under `flyqr:feedback`. View it in the Upstash Data Browser, or run `LRANGE flyqr:feedback 0 99` in its console. Each entry contains the message and submission timestamp. The latest 1,000 entries are retained. Feedback requires the Redis backend; no email is sent.
+
+### Room members
+
+Rooms hold one host and four guests. Guests choose a name or receive a numbered guest name. Guest files and notes go only to the host; the host selects a guest for replies. The host can remove guests, which invalidates their current membership token. A removed person can join again with the room code; removal is not a permanent device ban. Group rooms use the server relay with explicit receiver confirmations and separate incoming transfers per sender. Redis memberships allow a 15-second reconnection grace period; disconnected members are removed when cleanup runs.

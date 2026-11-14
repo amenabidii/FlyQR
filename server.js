@@ -21,6 +21,8 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
     }
     rooms.delete(code);
   }
+  const roster = room => room.members.map(id => ({ id, name: io.sockets.sockets.get(id)?.data.name || 'Guest', host: id === room.members[0] }));
+  const announce = room => io.to(room.code).emit('members', roster(room));
   const sweep = setInterval(() => { const now = Date.now(); for (const [ip, entry] of attempts) if (entry.until < now) attempts.delete(ip); }, 60000);
   sweep.unref();
   io.on('connection', socket => {
@@ -40,36 +42,49 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
       do { code = Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join(''); } while (rooms.has(code));
       const expires = Date.now() + ttl;
       const timer = setTimeout(() => close(code, 'This room has expired.'), ttl); timer.unref();
-      rooms.set(code, { members: [socket.id], expires, timer });
+      rooms.set(code, { code, members: [socket.id], expires, timer, guestCount: 0 });
+      socket.data.name = 'Host';
       socket.data.code = code; socket.join(code);
-      reply(ack, { code, expires, host: true });
+      reply(ack, { code, expires, host: true, memberId: socket.id, members: roster(rooms.get(code)) });
     });
     socket.on('join', (raw, ack) => {
       if (!limit()) return reply(ack, { error: 'Too many attempts. Try again in a minute.' });
       if (socket.data.code) return reply(ack, { error: 'Leave your current room first.' });
-      const code = typeof raw === 'string' ? raw.toUpperCase().replace(/[\s-]/g, '') : '';
+      const code = String(typeof raw === 'string' ? raw : raw?.code || '').toUpperCase().replace(/[\s-]/g, '');
       const room = rooms.get(code);
       if (!room) return reply(ack, { error: 'Room not found. Check the code or create a new room.' });
-      if (room.members.length >= 2) return reply(ack, { error: 'This room already has two devices.' });
+      if (room.members.length >= 5) return reply(ack, { error: 'This room is full (5 devices).' });
+      room.guestCount++; socket.data.name = String(raw?.name || '').trim().slice(0,30) || `Guest ${room.guestCount}`;
       room.members.push(socket.id); socket.data.code = code; socket.join(code);
-      reply(ack, { code, expires: room.expires, host: false });
+      reply(ack, { code, expires: room.expires, host: false, memberId: socket.id, members: roster(room) });
+      announce(room);
       io.to(code).emit('paired');
     });
     socket.on('signal', (data, ack) => {
-      if (socket.data.code && data && JSON.stringify(data).length < 70000) socket.to(socket.data.code).emit('signal', data);
-      reply(ack, { ok: true });
-    });
-    socket.on('packet', (packet, ack) => {
       const room = rooms.get(socket.data.code);
-      if (!room || room.members.length !== 2) return reply(ack, { error: 'The other device is not connected.' });
-      if (!packet || !['chat', 'start', 'chunk', 'finish', 'received', 'cancel'].includes(packet.type)) return reply(ack, { error: 'Invalid packet.' });
-      // Delivery acknowledgements come from the receiving browser.
-      socket.to(socket.data.code).timeout(15000).emit('packet', packet, (error, responses) => {
-        reply(ack, error ? { error: 'The other device did not respond.' } : responses[0] || { ok: true });
-      });
+      if (!room || !room.members.includes(socket.id) || !data || JSON.stringify(data).length > 70000) return reply(ack, { error: 'Invalid signal.' });
+      const host = room.members[0];
+      const target = socket.id === host ? data.to : host;
+      if (target === socket.id || !room.members.includes(target)) return reply(ack, { error: 'Choose a connected guest.' });
+      io.to(target).emit('signal', { ...data, from: socket.id, senderName: socket.data.name }); reply(ack, { ok: true });
     });
-    socket.on('end', (_, ack) => { close(socket.data.code, 'The room was closed.'); reply(ack, { ok: true }); });
-    socket.on('disconnect', () => close(socket.data.code, 'A device disconnected. Create a new room to reconnect.'));
+    socket.on('kick', (target, ack) => {
+      const room = rooms.get(socket.data.code);
+      if (!room || room.members[0] !== socket.id || target === socket.id || !room.members.includes(target)) return reply(ack, { error: 'Only the host can remove guests.' });
+      room.members = room.members.filter(id => id !== target);
+      const guest = io.sockets.sockets.get(target);
+      if (guest) { guest.emit('ended', 'The host removed you from the room.'); guest.leave(room.code); guest.data.code = null; }
+      announce(room); reply(ack, { ok: true });
+    });
+    function leave() {
+      const room = rooms.get(socket.data.code);
+      if (!room) return;
+      if (room.members[0] === socket.id) close(room.code, 'The host closed the room.');
+      else { room.members = room.members.filter(id => id !== socket.id); socket.leave(room.code); socket.data.code = null; announce(room); }
+    }
+    socket.on('leave', (_, ack) => { leave(); reply(ack, { ok: true }); });
+    socket.on('end', (_, ack) => { const room = rooms.get(socket.data.code); if (room?.members[0] !== socket.id) return reply(ack, { error: 'Only the host can close the room.' }); close(socket.data.code, 'The room was closed.'); reply(ack, { ok: true }); });
+    socket.on('disconnect', leave);
   });
   http.on('close', () => { clearInterval(sweep); for (const r of rooms.values()) clearTimeout(r.timer); });
   app.get('/health', (_, res) => res.json({ ok: true }));
@@ -77,7 +92,7 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const path = process.argv.includes('--dev') ? '/socket.io' : '/api/relay/socket.io';
+  const path = process.argv.includes('--dev') ? '/socket.io' : '/api/relay';
   const { app, http } = process.env.REDIS_URL
     ? await (await import('./backend/distributed.js')).createDistributedRelay({ path })
     : createRelay({ path });

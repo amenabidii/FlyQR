@@ -9,35 +9,19 @@ import { normalizeSocketPath } from '../backend/vercel-path.js';
 const url = process.env.TEST_REDIS_URL;
 const call = (s, event, data) => new Promise((resolve, reject) => s.timeout(3000).emit(event, data, (error, value) => error ? reject(error) : resolve(value)));
 const once = (s, event) => new Promise(resolve => s.once(event, resolve));
-test('independent servers share rooms, atomic admission, relay, resume credentials and expiry', { skip: !url, timeout: 20000 }, async t => {
-  const prefix = `flyqr-test:${randomBytes(8).toString('hex')}:`;
-  const a = await createDistributedRelay({ url, prefix, ttl: 3000, path: '/socket.io' });
-  const b = await createDistributedRelay({ url, prefix, ttl: 3000, path: '/socket.io' });
-  const sockets = [];
-  t.after(async () => { sockets.forEach(s => s.disconnect()); await Promise.all([a.shutdown(), b.shutdown()]); });
-  for (const s of [a, b]) await new Promise(r => s.http.listen(0, '127.0.0.1', r));
-  async function device(server) {
-    const s = io(`http://127.0.0.1:${server.http.address().port}`, { transports: ['websocket'], forceNew: true });
-    sockets.push(s); await once(s, 'connect'); return s;
-  }
-  const host = await device(a), guest = await device(b), outsider = await device(b);
-  const room = await call(host, 'create', null);
-  const joins = await Promise.all([call(guest, 'join', room.code), call(outsider, 'join', room.code)]);
-  assert.equal(joins.filter(r => !r.error).length, 1);
-  const receiver = joins[0].error ? outsider : guest;
-  receiver.on('packet', (p, ack) => ack({ ok: true, bytes: p.data ? Array.from(p.data) : null }));
-  const result = await call(host, 'packet', { type: 'chunk', data: Buffer.from([0, 255, 7]) });
-  assert.deepEqual(result.bytes, [0, 255, 7]);
-  host.disconnect();
-  const resumed = await device(b);
-  assert.ok((await call(resumed, 'resume', { code: room.code, token: '0'.repeat(64) })).error);
-  assert.equal((await call(resumed, 'resume', room)).host, true);
-  assert.equal((await call(resumed, 'packet', { type: 'chat', text: 'after reconnect' })).ok, true);
-  const ended = once(receiver, 'ended'); await call(resumed, 'end', null); assert.match(await ended, /closed/);
-  assert.ok((await call(receiver, 'packet', { type: 'chat', text: 'late' })).error);
-  const expired = await call(resumed, 'create', null);
-  await new Promise(r => setTimeout(r, 3100));
-  const fresh = await device(a); assert.ok((await call(fresh, 'resume', expired)).error);
+test('Redis admission is atomic and removed tokens cannot resume', {skip: !url}, async t => {
+ const relay=await createDistributedRelay({url,prefix:`test:${randomBytes(8).toString('hex')}:`,ttl:500});
+ t.after(()=>relay.shutdown());
+ const r=relay.rooms;const host=await r.create('host');
+ const results=await Promise.allSettled(Array.from({length:6},(_,i)=>r.join(host.code,`guest${i}`,i===0?'John':'')));
+ assert.equal(results.filter(x=>x.status==='fulfilled').length,4);
+ const guests=results.filter(x=>x.status==='fulfilled').map(x=>x.value);
+ await assert.rejects(r.act('kick',host.code,guests[0].token,'guest0','','host'),/host/);
+ await r.act('kick',host.code,host.token,'host','','guest0');
+ await assert.rejects(r.act('resume',host.code,guests[0].token,'new'),/credential/);
+ const resumed=await r.act('resume',host.code,host.token,'new-host');assert.equal(resumed.host,true);
+ await assert.rejects(r.act('leave',host.code,host.token,'host'),/replaced/);
+ await new Promise(r=>setTimeout(r,550));await assert.rejects(r.act('read',host.code,host.token,'new-host'),/expired/);
 });
 
 test('client keeps room through rotation and relays complete binary files across servers', { skip: !url, timeout: 20000 }, async t => {
@@ -59,10 +43,10 @@ test('client keeps room through rotation and relays complete binary files across
   const one = device(a, '/api/relay/socket.io'), two = device(b, '/api/relay');
   const room = await one.c.enter(); await two.c.enter(room.code);
   await new Promise(r => setTimeout(r, 2000));
-  await one.c.chat('Still connected'); assert.equal(two.messages[0].text, 'Still connected');
+  await two.c.chat('Still connected'); assert.equal(one.messages[0].text, 'Still connected');
   const bytes = Uint8Array.from({ length: 100000 }, (_, i) => i % 256);
-  await one.c.sendFile(new File([bytes], 'test.bin'));
-  const file = [...two.files.values()][0]; assert.equal(file.done, true);
+  await two.c.sendFile(new File([bytes], 'test.bin'));
+  const file = [...one.files.values()][0]; assert.equal(file.done, true);
   assert.deepEqual(new Uint8Array(await (await fetch(file.url)).arrayBuffer()), bytes);
   assert.deepEqual(one.ends, []); assert.deepEqual(two.ends, []);
 });

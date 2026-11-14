@@ -37,12 +37,16 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       if (!r) throw new Error('Join a room first.');
       return rooms.act(action, r.code, r.token, socket.id);
     }
+    const roster = room => room.members.map(m => ({ id: m.socket, name: m.name || (m.host ? 'Host' : 'Guest'), host: m.host }));
+    const announce = room => io.to(room.code).emit('members', roster(room));
     async function attach(room) {
       socket.data.room = room;
       await socket.join(room.code);
       clearTimeout(expiry);
       expiry = setTimeout(() => { socket.emit('ended', 'This room has expired.'); socket.leave(room.code); socket.data.room = null; }, Math.max(0, room.expires - Date.now())); expiry.unref();
-      return room;
+      const state = await rooms.act('read', room.code, room.token, socket.id);
+      announce(state.room);
+      return { ...room, memberId: socket.id, members: roster(state.room) };
     }
     const limit = () => rooms.limit(process.env.VERCEL ? String(socket.handshake.headers['x-forwarded-for'] || socket.handshake.address).split(',')[0].trim() : socket.handshake.address);
     handle('feedback', async data => {
@@ -55,8 +59,8 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
     handle('create', async () => { await limit(); if (socket.data.room) throw new Error('Leave your current room first.'); return attach(await rooms.create(socket.id)); });
     handle('join', async raw => {
       await limit(); if (socket.data.room) throw new Error('Leave your current room first.');
-      const code = typeof raw === 'string' ? raw.toUpperCase().replace(/[\s-]/g, '') : '';
-      const room = await attach(await rooms.join(code, socket.id));
+      const code = String(typeof raw === 'string' ? raw : raw?.code || '').toUpperCase().replace(/[\s-]/g, '');
+      const room = await attach(await rooms.join(code, socket.id, raw?.name));
       // Give the client time to process the join acknowledgement before negotiating.
       setTimeout(() => io.to(code).emit('paired'), 50).unref();
       return room;
@@ -71,17 +75,27 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
     handle('signal', async data => {
       const { room } = await membership();
       if (!data || JSON.stringify(data).length > 70000) throw new Error('Invalid signal.');
-      const other = room.members.find(m => m.socket !== socket.id);
-      if (other) io.to(other.socket).emit('signal', data);
+      const sender = room.members.find(m => m.socket === socket.id);
+      const target = sender.host ? room.members.find(m => m.socket === data.to && !m.host) : room.members.find(m => m.host);
+      if (!target) throw new Error('Choose a connected guest.');
+      io.to(target.socket).emit('signal', { ...data, from: socket.id, senderName: sender.name || 'Host' });
     });
-    handle('packet', async packet => {
-      const { room } = await membership();
-      if (!packet || !['chat', 'start', 'chunk', 'finish', 'received', 'cancel'].includes(packet.type)) throw new Error('Invalid packet.');
-      const other = room.members.find(m => m.socket !== socket.id);
-      if (!other) throw new Error('The other device is not connected.');
-      const replies = await io.to(other.socket).timeout(15000).emitWithAck('packet', packet);
-      if (replies.length !== 1) throw new Error('The other device is reconnecting. Please resend.');
-      return replies[0];
+    handle('kick', async target => {
+      const r = socket.data.room;
+      if (!r) throw new Error('Join a room first.');
+      const state = await membership();
+      if (!state.host || !state.room.members.some(m => m.socket === target && !m.host)) throw new Error('Choose a guest in this room.');
+      const { room } = await rooms.act('kick', r.code, r.token, socket.id, '', target);
+      io.to(target).emit('ended', 'The host removed you from the room.');
+      io.in(target).socketsLeave(r.code);
+      announce(room);
+    });
+    handle('leave', async () => {
+      const r = socket.data.room;
+      const { room, host } = await membership('leave');
+      if (host) { io.to(room.code).emit('ended', 'The host closed the room.'); io.in(room.code).socketsLeave(room.code); }
+      else { socket.leave(room.code); announce(room); }
+      socket.data.room = null; clearTimeout(expiry);
     });
     handle('end', async () => {
       const { room } = await membership('end');
@@ -93,7 +107,18 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       if (socket.data.room) socket.leave(socket.data.room.code);
       socket.data.room = null; clearTimeout(expiry);
     });
-    socket.on('disconnect', () => { clearTimeout(rotation); clearTimeout(expiry); });
+    socket.on('disconnect', () => {
+      clearTimeout(rotation); clearTimeout(expiry);
+      const previous = socket.data.room;
+      if (!previous) return;
+      setTimeout(async () => {
+        try {
+          const { room, host } = await rooms.act('leave', previous.code, previous.token, socket.id);
+          if (host) { io.to(room.code).emit('ended', 'The host disconnected.'); io.in(room.code).socketsLeave(room.code); }
+          else announce(room);
+        } catch { /* Resumed or already removed. */ }
+      }, 15000).unref();
+    });
   });
   return { app, http, io, rooms, async shutdown() { await new Promise(r => io.close(r)); await Promise.all(clients.map(c => c.isOpen ? c.quit() : null)); } };
 }
