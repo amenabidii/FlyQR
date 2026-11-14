@@ -8,3 +8,5 @@
 .binance-qr{display:block;width:100%;max-width:360px;height:auto;margin:18px auto 0;border-radius:14px}
 
 .copyright{margin-top:8px}
+
+.room-countdown{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;border-radius:12px;background:#e8dcff;color:#302b4e}.room-countdown strong{font-variant-numeric:tabular-nums;font-size:18px}
