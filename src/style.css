@@ -10,3 +10,5 @@
 .copyright{margin-top:8px}
 
 .room-countdown{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;border-radius:12px;background:#e8dcff;color:#302b4e}.room-countdown strong{font-variant-numeric:tabular-nums;font-size:18px}
+
+.room-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}.end-room-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;background:#bd3047;color:#fff;border:2px solid #982238;border-radius:13px;padding:10px 15px;font-weight:800;white-space:nowrap}.end-room-button:hover{background:#a4263c}@media(max-width:600px){.room-actions{justify-content:flex-start}}
