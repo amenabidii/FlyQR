@@ -116,7 +116,7 @@ export function connect(events, serverUrl, options = {}) {
   socket.connect();
   return {
     async enter(code) { room = await request(code ? 'join' : 'create', code || null); return room; },
-    end() { if (ready) emit('end', null).catch(error => events.error(error.message)); cleanup(); },
+    async end() { await request('end', null); cleanup(); },
     async chat(text) { await request('packet', { type: 'chat', text }); },
     async sendFile(file) {
       if (file.size > MAX_FILE) throw new Error('Files can be up to 100 MB.');
