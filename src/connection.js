@@ -53,7 +53,7 @@ export function connect(events, serverUrl, options = {}) {
     }
     if (packet.type === 'start') {
       if (incoming.has(key) || incoming.size >= 4 || !Number.isSafeInteger(packet.size) || packet.size < 0 || packet.size > MAX_FILE || typeof packet.name !== 'string' || packet.name.length > 255) throw new Error('Cannot accept this file.');
-      incoming.set(key, { ...packet, chunks: [], bytes: 0 });
+      incoming.set(key, { ...packet, chunks: [], offsets: new Set(), bytes: 0 });
       events.file({ id: key, name: packet.name, size: packet.size, sender, progress: 0, mine: false }); return;
     }
     const file = incoming.get(key);
@@ -62,8 +62,8 @@ export function connect(events, serverUrl, options = {}) {
     if (packet.type === 'chunk') {
       if (typeof packet.data !== 'string' || packet.data.length > 44000) throw new Error('Invalid chunk.');
       const data = Uint8Array.from(atob(packet.data), c => c.charCodeAt(0));
-      if (data.length > 32768 || file.bytes + data.length > file.size) throw new Error('Invalid chunk size.');
-      file.chunks.push(data); file.bytes += data.length;
+      if (!Number.isSafeInteger(packet.offset) || packet.offset < 0 || packet.offset % 32768 !== 0 || data.length !== Math.min(32768, file.size - packet.offset) || file.offsets.has(packet.offset) || file.bytes + data.length > file.size) throw new Error('Invalid file chunk.');
+      file.offsets.add(packet.offset); file.chunks[packet.offset / 32768] = data; file.bytes += data.length;
       events.file({ id: key, progress: file.size ? Math.min(99, Math.round(file.bytes / file.size * 100)) : 0 }); return;
     }
     if (packet.type === 'finish') {
@@ -111,11 +111,21 @@ export function connect(events, serverUrl, options = {}) {
       events.file({ id, name: file.name, size: file.size, mine: true, progress: 0 });
       try {
         await deliver({ type: 'start', id, name: file.name, size: file.size }, to);
-        for (let offset = 0; offset < file.size; offset += 32768) {
-          const bytes = new Uint8Array(await file.slice(offset, offset + 32768).arrayBuffer());
-          await deliver({ type: 'chunk', id, data: btoa(String.fromCharCode(...bytes)) }, to);
-          events.file({ id, progress: Math.min(99, Math.round((offset + bytes.length) / file.size * 100)) });
-        }
+        let nextOffset = 0, confirmedBytes = 0, failure;
+        const worker = async () => {
+          while (!failure && nextOffset < file.size) {
+            const offset = nextOffset; nextOffset += 32768;
+            try {
+              const bytes = new Uint8Array(await file.slice(offset, offset + 32768).arrayBuffer());
+              if (failure) return;
+              await deliver({ type: 'chunk', id, offset, data: btoa(String.fromCharCode(...bytes)) }, to);
+              confirmedBytes += bytes.length;
+              events.file({ id, progress: Math.min(99, Math.round(confirmedBytes / file.size * 100)) });
+            } catch (error) { failure ||= error; }
+          }
+        };
+        await Promise.all(Array.from({ length: 32 }, worker));
+        if (failure) throw failure;
         await deliver({ type: 'finish', id }, to); events.file({ id, progress: 100, done: true });
       } catch (error) {
         events.file({ id, error: error.message });
