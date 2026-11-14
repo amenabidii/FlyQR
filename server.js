@@ -56,7 +56,7 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
       io.to(code).emit('paired');
     });
     socket.on('signal', (data, ack) => {
-      if (socket.data.code && data && JSON.stringify(data).length < 20000) socket.to(socket.data.code).emit('signal', data);
+      if (socket.data.code && data && JSON.stringify(data).length < 70000) socket.to(socket.data.code).emit('signal', data);
       reply(ack, { ok: true });
     });
     socket.on('packet', (packet, ack) => {

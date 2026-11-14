@@ -70,7 +70,7 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
     });
     handle('signal', async data => {
       const { room } = await membership();
-      if (!data || JSON.stringify(data).length > 20000) throw new Error('Invalid signal.');
+      if (!data || JSON.stringify(data).length > 70000) throw new Error('Invalid signal.');
       const other = room.members.find(m => m.socket !== socket.id);
       if (other) io.to(other.socket).emit('signal', data);
     });

@@ -20,6 +20,18 @@ export function connect(events, serverUrl, options = {}) {
     if (disposed || startedIn !== generation) throw new Error('Room closed.');
     return emit(event, data);
   }
+  async function relayPacket(packet) {
+    const deliveryId = newId();
+    const payload = packet.type === 'chunk' ? { ...packet, data: btoa(String.fromCharCode(...new Uint8Array(packet.data))) } : packet;
+    let timer;
+    const confirmed = new Promise((resolve, reject) => {
+      receipts.set(deliveryId, { resolve, reject });
+      timer = setTimeout(() => reject(new Error('Transfer confirmation timed out. Please resend.')), 20000);
+    });
+    confirmed.catch(() => {});
+    try { await request('signal', { deliveryId, payload }); await confirmed; }
+    finally { clearTimeout(timer); receipts.delete(deliveryId); }
+  }
   function cleanup() {
     generation++;
     peer?.close(); peer = null; channel = null; candidates = []; incoming = null; room = null;
@@ -48,7 +60,7 @@ export function connect(events, serverUrl, options = {}) {
       if (!incoming || incoming.id !== packet.id || incoming.bytes !== incoming.size) throw new Error('Incomplete file. Please resend it.');
       const url = URL.createObjectURL(new Blob(incoming.chunks, { type: 'application/octet-stream' }));
       urls.add(url); events.file({ id: incoming.id, url, progress: 100, done: true }); incoming = null;
-      await request('packet', { type: 'received', id: packet.id });
+      await relayPacket({ type: 'received', id: packet.id });
     } else if (packet.type === 'received') {
       receipts.get(packet.id)?.resolve(); receipts.delete(packet.id);
     } else if (packet.type === 'cancel') {
@@ -74,6 +86,21 @@ export function connect(events, serverUrl, options = {}) {
     return peer;
   }
   socket.on('signal', async data => {
+    if (data?.deliveryReceipt) {
+      const pending = receipts.get(data.deliveryReceipt);
+      if (data.error) pending?.reject(new Error(data.error)); else pending?.resolve();
+      receipts.delete(data.deliveryReceipt); return;
+    }
+    if (data?.deliveryId && data?.payload) {
+      let error;
+      try {
+        const packet = data.payload;
+        if (packet.type === 'chunk') packet.data = Uint8Array.from(atob(packet.data), char => char.charCodeAt(0)).buffer;
+        await receive(packet);
+      } catch (e) { error = e.message; }
+      request('signal', { deliveryReceipt: data.deliveryId, error }).catch(() => {});
+      return;
+    }
     if (data?.chatReceipt) {
       receipts.get(data.chatReceipt)?.resolve(); receipts.delete(data.chatReceipt); return;
     }
@@ -145,7 +172,7 @@ export function connect(events, serverUrl, options = {}) {
       const direct = channel?.readyState === 'open' ? channel : null;
       const send = async packet => {
         if (!room || disposed) throw new Error('Room closed.');
-        if (!direct) return request('packet', packet);
+        if (!direct) return relayPacket(packet);
         const deadline = Date.now() + 20000;
         while (direct.bufferedAmount > 262144) { if (Date.now() > deadline || direct.readyState !== 'open') throw new Error('Transfer interrupted. Please resend.'); await new Promise(r => setTimeout(r, 20)); }
         if (direct.readyState !== 'open') throw new Error('Transfer interrupted. Please resend.');
@@ -165,7 +192,7 @@ export function connect(events, serverUrl, options = {}) {
         events.file({ id, progress: 100, done: true });
       } catch (error) {
         events.file({ id, error: error.message });
-        if (room) request('packet', { type: 'cancel', id }).catch(() => {});
+        if (room) relayPacket({ type: 'cancel', id }).catch(() => {});
         throw error;
       } finally { clearTimeout(timer); receipts.delete(id); }
     },
