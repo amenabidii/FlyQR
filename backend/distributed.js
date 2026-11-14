@@ -37,7 +37,7 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       if (!r) throw new Error('Join a room first.');
       return rooms.act(action, r.code, r.token, socket.id);
     }
-    const roster = room => room.members.map(m => ({ id: m.socket, name: m.name || (m.host ? 'Host' : 'Guest'), host: m.host }));
+    const roster = room => room.members.map(m => ({ id: m.token, name: m.name || (m.host ? 'Host' : 'Guest'), host: m.host }));
     const announce = room => io.to(room.code).emit('members', roster(room));
     async function attach(room) {
       socket.data.room = room;
@@ -46,7 +46,7 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       expiry = setTimeout(() => { socket.emit('ended', 'This room has expired.'); socket.leave(room.code); socket.data.room = null; }, Math.max(0, room.expires - Date.now())); expiry.unref();
       const state = await rooms.act('read', room.code, room.token, socket.id);
       announce(state.room);
-      return { ...room, memberId: socket.id, members: roster(state.room) };
+      return { ...room, memberId: state.room.members.find(m => m.socket === socket.id).token, members: roster(state.room) };
     }
     const limit = () => rooms.limit(process.env.VERCEL ? String(socket.handshake.headers['x-forwarded-for'] || socket.handshake.address).split(',')[0].trim() : socket.handshake.address);
     handle('feedback', async data => {
@@ -54,6 +54,15 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       const message = typeof data === 'string' ? data.trim() : '';
       if (!message || message.length > 3000) throw new Error('Please write between 1 and 3,000 characters.');
       await redis.multi().lPush(prefix + 'feedback', JSON.stringify({ message, createdAt: new Date().toISOString() })).lTrim(prefix + 'feedback', 0, 999).exec();
+      return { ok: true };
+    });
+    handle('check-room', async raw => {
+      await limit();
+      const code = String(raw || '').trim().toUpperCase();
+      if (!/^[A-Z2-9]{4}$/.test(code)) throw new Error('Enter a valid four-character room code.');
+      const value = await redis.get(prefix + 'room:' + code);
+      if (!value) throw new Error('Room not found or expired.');
+      if (JSON.parse(value).members.length >= 5) throw new Error('This room is full (5 devices).');
       return { ok: true };
     });
     handle('create', async () => { await limit(); if (socket.data.room) throw new Error('Leave your current room first.'); return attach(await rooms.create(socket.id)); });
@@ -76,18 +85,19 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       const { room } = await membership();
       if (!data || JSON.stringify(data).length > 70000) throw new Error('Invalid signal.');
       const sender = room.members.find(m => m.socket === socket.id);
-      const target = sender.host ? room.members.find(m => m.socket === data.to && !m.host) : room.members.find(m => m.host);
+      const target = sender.host ? room.members.find(m => m.token === data.to && !m.host) : room.members.find(m => m.host);
       if (!target) throw new Error('Choose a connected guest.');
-      io.to(target.socket).emit('signal', { ...data, from: socket.id, senderName: sender.name || 'Host' });
+      io.to(target.socket).emit('signal', { ...data, from: sender.token, senderName: sender.name || 'Host' });
     });
     handle('kick', async target => {
       const r = socket.data.room;
       if (!r) throw new Error('Join a room first.');
       const state = await membership();
-      if (!state.host || !state.room.members.some(m => m.socket === target && !m.host)) throw new Error('Choose a guest in this room.');
-      const { room } = await rooms.act('kick', r.code, r.token, socket.id, '', target);
-      io.to(target).emit('ended', 'The host removed you from the room.');
-      io.in(target).socketsLeave(r.code);
+      if (!state.host || !state.room.members.some(m => m.token === target && !m.host)) throw new Error('Choose a guest in this room.');
+      const targetSocket = state.room.members.find(m => m.token === target).socket;
+      const { room } = await rooms.act('kick', r.code, r.token, socket.id, '', targetSocket);
+      io.to(targetSocket).emit('ended', 'The host removed you from the room.');
+      io.in(targetSocket).socketsLeave(r.code);
       announce(room);
     });
     handle('leave', async () => {

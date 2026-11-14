@@ -6,9 +6,9 @@ test('five devices, private transfers, names, concurrency and removal', { timeou
  const relay = createRelay(); await new Promise(r => relay.http.listen(0,'127.0.0.1',r));
  const clients=[]; t.after(async()=>{clients.forEach(d=>d.c.destroy());await new Promise(r=>relay.io.close(r));});
  const make=()=>{const d={files:new Map(),notes:[],members:[]};d.c=connect({online(){},paired(){},mode(){},error(){},ended(){d.ended=true},members(m){d.members=m},message(m){d.notes.push(m)},file(f){d.files.set(f.id,{...d.files.get(f.id),...f})}},`http://127.0.0.1:${relay.http.address().port}`);clients.push(d);return d;};
- const host=make();const room=await host.c.enter();const guests=[];
+ const host=make();await assert.rejects(host.c.checkRoom('!!!!'));const room=await host.c.enter();await host.c.checkRoom(room.code);const guests=[];
  for(let i=0;i<4;i++){const d=make();d.room=await d.c.enter(room.code,i===0?'John':'');guests.push(d);}
- const sixth=make();await assert.rejects(sixth.c.enter(room.code),/full/);
+ const sixth=make();await assert.rejects(sixth.c.checkRoom(room.code),/full/);await assert.rejects(sixth.c.enter(room.code),/full/);
  const bytes=Uint8Array.from({length:100000},(_,i)=>i%256);
  await Promise.all(guests.map((d,i)=>d.c.sendFile(new File([bytes],`file${i}.bin`))));
  assert.equal(host.files.size,4);for(const f of host.files.values()){assert.equal(f.done,true);assert.deepEqual(new Uint8Array(await(await fetch(f.url)).arrayBuffer()),bytes);assert.ok(f.sender);}

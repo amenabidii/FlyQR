@@ -34,6 +34,11 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
       return ++entry.count <= 30;
     }
     socket.on('feedback', (_, ack) => reply(ack, { error: 'Feedback requires the Redis backend. Please try the hosted website.' }));
+    socket.on('check-room', (raw, ack) => {
+      if (!limit()) return reply(ack, { error: 'Too many attempts. Try again in a minute.' });
+      const room = rooms.get(String(raw || '').trim().toUpperCase());
+      reply(ack, !room ? { error: 'Room not found or expired.' } : room.members.length >= 5 ? { error: 'This room is full (5 devices).' } : { ok: true });
+    });
     socket.on('create', (_, ack) => {
       if (!limit()) return reply(ack, { error: 'Too many attempts. Try again in a minute.' });
       if (socket.data.code) return reply(ack, { error: 'Leave your current room first.' });

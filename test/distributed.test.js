@@ -44,6 +44,7 @@ test('client keeps room through rotation and relays complete binary files across
   const room = await one.c.enter(); await two.c.enter(room.code);
   await new Promise(r => setTimeout(r, 2000));
   await two.c.chat('Still connected'); assert.equal(one.messages[0].text, 'Still connected');
+  await one.c.chat('Host reply after rotation'); assert.equal(two.messages[0].text, 'Host reply after rotation');
   const bytes = Uint8Array.from({ length: 100000 }, (_, i) => i % 256);
   await two.c.sendFile(new File([bytes], 'test.bin'));
   const file = [...one.files.values()][0]; assert.equal(file.done, true);

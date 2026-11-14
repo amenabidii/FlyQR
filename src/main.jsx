@@ -22,7 +22,7 @@ function App() {
   const connection = useRef(), input = useRef(), feed = useRef(), sendLock = useRef(false);
   const clear = () => { setRoom(null); setMembers([]); setRecipient(''); setPaired(false); setFiles([]); setMessages([]); setQr(''); history.replaceState(null, '', location.pathname); };
   useEffect(() => {
-    connection.current = connect({ online: setOnline, paired: setPaired, members: setMembers, mode: setMode, error: setError,
+    connection.current = connect({ online: setOnline, paired: setPaired, members: setMembers, recipient: setRecipient, mode: setMode, error: setError,
       ended: reason => { clear(); setError(reason); }, message: message => setMessages(m => [...m.slice(-199), message]),
       file: file => setFiles(current => current.some(f => f.id === file.id) ? current.map(f => f.id === file.id ? { ...f, ...file } : f) : [...current, file]) });
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -32,7 +32,13 @@ function App() {
   const url = room ? `${location.origin}/#room=${room.code}` : '';
   useEffect(() => { if (url) QRCode.toDataURL(url, { width: 240, margin: 1, color: { dark: '#193e34', light: '#ffffff' } }).then(setQr).catch(() => setError('QR code unavailable. Use the room code.')); }, [url]);
   async function enter(join, name) {
-    if (join && name === undefined) { setJoining(true); return; }
+    if (join && name === undefined) {
+      setBusy(true); setError('');
+      try { await connection.current.checkRoom(code); setJoining(true); }
+      catch (error) { setError(error.message); }
+      finally { setBusy(false); }
+      return;
+    }
     setBusy(true); setError('');
     try { const result = await connection.current.enter(join ? code : null, name); setNow(Date.now()); setRoom(result); setJoining(false); history.replaceState(null, '', `/#room=${result.code}`); } catch (e) { setError(e.message); } finally { setBusy(false); }
   }

@@ -21,6 +21,10 @@ export function connect(events, serverUrl, options = {}) {
   }
   function members(list) {
     if (room) room.members = list;
+    if (room?.host && (!recipient || !list.some(m => m.id === recipient))) {
+      const guests = list.filter(m => !m.host); recipient = guests.length === 1 ? guests[0].id : '';
+      events.recipient?.(recipient);
+    }
     events.members?.(list);
     events.paired(list.length > 1);
     events.mode('Server relay');
@@ -94,6 +98,7 @@ export function connect(events, serverUrl, options = {}) {
   socket.on('connect_error', () => events.online(false));
   socket.connect();
   return {
+    async checkRoom(code) { return request('check-room', code); },
     async feedback(message) { return request('feedback', message); },
     async enter(code, name = '') { room = await request(code ? 'join' : 'create', code ? { code, name } : null); members(room.members || []); return room; },
     selectRecipient(id) { recipient = id; },
