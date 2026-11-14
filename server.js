@@ -36,7 +36,7 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
       if (socket.data.code) return reply(ack, { error: 'Leave your current room first.' });
       if (rooms.size >= 1000) return reply(ack, { error: 'The server is busy. Try again shortly.' });
       let code;
-      do { code = Array.from({ length: 8 }, () => alphabet[randomInt(alphabet.length)]).join(''); } while (rooms.has(code));
+      do { code = Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join(''); } while (rooms.has(code));
       const expires = Date.now() + ttl;
       const timer = setTimeout(() => close(code, 'This room has expired.'), ttl); timer.unref();
       rooms.set(code, { members: [socket.id], expires, timer });

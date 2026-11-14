@@ -74,6 +74,16 @@ export function connect(events, serverUrl, options = {}) {
     return peer;
   }
   socket.on('signal', async data => {
+    if (data?.chatReceipt) {
+      receipts.get(data.chatReceipt)?.resolve(); receipts.delete(data.chatReceipt); return;
+    }
+    if (data?.chat) {
+      try {
+        await receive({ type: 'chat', text: data.chat.text });
+        request('signal', { chatReceipt: data.chat.id }).catch(() => {});
+      } catch (error) { events.error(error.message); }
+      return;
+    }
     try {
       const pc = setupPeer();
       if (data.description) {
@@ -117,7 +127,17 @@ export function connect(events, serverUrl, options = {}) {
   return {
     async enter(code) { room = await request(code ? 'join' : 'create', code || null); return room; },
     async end() { await request('end', null); cleanup(); },
-    async chat(text) { await request('packet', { type: 'chat', text }); },
+    async chat(text) {
+      const id = newId();
+      let timer;
+      const delivered = new Promise((resolve, reject) => {
+        receipts.set(id, { resolve, reject });
+        timer = setTimeout(() => reject(new Error('Delivery confirmation unavailable. The message may have arrived.')), 20000);
+      });
+      delivered.catch(() => {});
+      try { await request('signal', { chat: { id, text } }); await delivered; }
+      finally { clearTimeout(timer); receipts.delete(id); }
+    },
     async sendFile(file) {
       if (file.size > MAX_FILE) throw new Error('Files can be up to 100 MB.');
       const id = newId();

@@ -39,14 +39,14 @@ export class RedisRooms {
     const token = randomBytes(32).toString('hex');
     const expires = Date.now() + this.ttl;
     for (let i = 0; i < 5; i++) {
-      const code = Array.from({ length: 8 }, () => alphabet[randomInt(alphabet.length)]).join('');
+      const code = Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join('');
       const room = { code, expires, members: [{ token: digest(token), socket, host: true }] };
       if (await this.redis.set(this.prefix + 'room:' + code, JSON.stringify(room), { NX: true, PX: this.ttl })) return { code, token, expires, host: true };
     }
     throw new Error('Could not create a room. Try again.');
   }
   async act(action, code, token, socket) {
-    if (!/^[A-Z2-9]{8}$/.test(code || '') || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid room credential.');
+    if (!/^[A-Z2-9]{4}$/.test(code || '') || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid room credential.');
     const result = JSON.parse(await this.redis.eval(update, { keys: [this.prefix + 'room:' + code], arguments: [action, digest(token), socket] }));
     if (result.error) throw new Error(result.error);
     return result;

@@ -19,7 +19,7 @@ const once = (s, event) => new Promise(r => s.once(event, r));
 
 test('rooms pair two devices, reject outsiders, relay exact bytes and close together', async t => {
   const f = await fixture(t); const a = await f.device(), b = await f.device(), outsider = await f.device();
-  const room = await call(a, 'create', null); assert.match(room.code, /^[A-Z2-9]{8}$/);
+  const room = await call(a, 'create', null); assert.match(room.code, /^[A-Z2-9]{4}$/);
   assert.equal((await call(b, 'join', room.code.toLowerCase())).host, false);
   assert.match((await call(outsider, 'join', room.code)).error, /two devices/);
   assert.match((await call(outsider, 'packet', { type: 'chat', text: 'bad' })).error, /not connected/);
