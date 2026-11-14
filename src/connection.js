@@ -2,7 +2,7 @@ import { newId } from './id.js';
 import { io } from 'socket.io-client';
 export const MAX_FILE = 100 * 1024 * 1024;
 export function connect(events, serverUrl, options = {}) {
-  const socket = io(serverUrl, { autoConnect: false, transports: ['websocket'], path: options.path || (!serverUrl && import.meta.env?.PROD ? '/api/relay/socket.io' : '/socket.io') });
+  const socket = io(serverUrl, { autoConnect: false, transports: ['websocket'], path: options.path || (!serverUrl && import.meta.env?.PROD ? '/api/relay' : '/socket.io') });
   let ready = false;
   let generation = 0;
   let peer, channel, room, incoming, disposed = false;
