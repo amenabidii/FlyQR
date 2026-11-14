@@ -138,3 +138,7 @@ Browser checks cover both transfer directions, empty files, downloaded byte inte
 - [Redis Cloud setup](https://redis.io/docs/latest/operate/rc/rc-quickstart/)
 - [Socket.IO server options](https://socket.io/docs/v4/server-options/)
 - [WebRTC data-channel buffering](https://developer.mozilla.org/en-US/docs/Web/API/RTCDataChannel/bufferedAmount)
+
+### Feedback
+
+Feedback is stored privately in the connected Redis database under `flyqr:feedback`. View it in the Upstash Data Browser, or run `LRANGE flyqr:feedback 0 99` in its console. Each entry contains the message and submission timestamp. The latest 1,000 entries are retained. Feedback requires the Redis backend; no email is sent.

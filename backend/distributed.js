@@ -45,6 +45,13 @@ if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL befor
       return room;
     }
     const limit = () => rooms.limit(process.env.VERCEL ? String(socket.handshake.headers['x-forwarded-for'] || socket.handshake.address).split(',')[0].trim() : socket.handshake.address);
+    handle('feedback', async data => {
+      await limit();
+      const message = typeof data === 'string' ? data.trim() : '';
+      if (!message || message.length > 3000) throw new Error('Please write between 1 and 3,000 characters.');
+      await redis.multi().lPush(prefix + 'feedback', JSON.stringify({ message, createdAt: new Date().toISOString() })).lTrim(prefix + 'feedback', 0, 999).exec();
+      return { ok: true };
+    });
     handle('create', async () => { await limit(); if (socket.data.room) throw new Error('Leave your current room first.'); return attach(await rooms.create(socket.id)); });
     handle('join', async raw => {
       await limit(); if (socket.data.room) throw new Error('Leave your current room first.');

@@ -125,6 +125,7 @@ export function connect(events, serverUrl, options = {}) {
   socket.on('connect_error', () => events.online(false));
   socket.connect();
   return {
+    async feedback(message) { return request('feedback', message); },
     async enter(code) { room = await request(code ? 'join' : 'create', code || null); return room; },
     async end() { await request('end', null); cleanup(); },
     async chat(text) {

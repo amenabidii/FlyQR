@@ -31,6 +31,7 @@ export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
       if (!entry || entry.until < Date.now()) { entry = { count: 0, until: Date.now() + 60000 }; attempts.set(ip, entry); }
       return ++entry.count <= 30;
     }
+    socket.on('feedback', (_, ack) => reply(ack, { error: 'Feedback requires the Redis backend. Please try the hosted website.' }));
     socket.on('create', (_, ack) => {
       if (!limit()) return reply(ack, { error: 'Too many attempts. Try again in a minute.' });
       if (socket.data.code) return reply(ack, { error: 'Leave your current room first.' });

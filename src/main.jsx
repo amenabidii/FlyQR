@@ -82,8 +82,8 @@ function App() {
   const remaining = room ? Math.max(0, Math.ceil((room.expires - now) / 1000)) : 0;
   const countdown = `${Math.floor(remaining / 60).toString().padStart(2, '0')}:${(remaining % 60).toString().padStart(2, '0')}`;
   return <div className="shell">
-    <header><a className="brand" href="/" onClick={e => { if (room) { e.preventDefault(); void leaveRoom(); } }}><span className="logo"><Send size={27}/></span>Fly-<span>QR</span></a><nav aria-label="Main navigation"><button onClick={() => setPage('about')}>About</button><button onClick={() => setPage('contact')}>Contact</button><button className="support-button" onClick={() => setPage('support')}>Support me <span aria-hidden="true">♡</span></button></nav></header>
-    {page && <InfoDialog key={page} page={page} close={() => setPage(null)}/>}
+    <header><a className="brand" href="/" onClick={e => { if (room) { e.preventDefault(); void leaveRoom(); } }}><span className="logo"><Send size={27}/></span>Fly-<span>QR</span></a><nav aria-label="Main navigation"><button onClick={() => setPage('feedback')}>Feedback</button><button onClick={() => setPage('about')}>About</button><button onClick={() => setPage('contact')}>Contact</button><button className="support-button" onClick={() => setPage('support')}>Support me <span aria-hidden="true">♡</span></button></nav></header>
+    {page && <InfoDialog key={page} submitFeedback={message => connection.current.feedback(message)} page={page} close={() => setPage(null)}/>}
     {error && <div className="notice" role="alert"><span>{error}</span><button aria-label="Dismiss notification" onClick={() => setError('')}><X size={18}/></button></div>}
     {!room ? <main className="landing">
       <div className="intro"><div className="bubble bubble-one" aria-hidden="true">✦</div><div className="bubble bubble-two" aria-hidden="true">✳</div><div className="hello-pill">A little file magic. ✨</div><h1><span>Scan.</span> <span>Send.</span><br/><span>Done.</span><span className="hero-plane" aria-hidden="true"><Send/></span></h1><p>Your files. Your other device.<br/>No login. No extra steps.</p></div>
