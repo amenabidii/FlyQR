@@ -29,7 +29,7 @@ return cjson.encode({room=r, host=member.host})
 `;
 
 export class RedisRooms {
-  constructor(redis, { prefix = 'flyqr:', ttl = 3600000 } = {}) { this.redis = redis; this.prefix = prefix; this.ttl = ttl; }
+  constructor(redis, { prefix = 'flyqr:', ttl = 1200000 } = {}) { this.redis = redis; this.prefix = prefix; this.ttl = ttl; }
   async limit(ip) {
     const key = this.prefix + 'rate:' + digest(ip);
     const count = await this.redis.eval("local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],60) end; return n", { keys: [key], arguments: [] });

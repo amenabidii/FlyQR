@@ -4,7 +4,7 @@ import { randomInt } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { Server } from 'socket.io';
 
-export function createRelay({ ttl = 3600000, path = '/socket.io' } = {}) {
+export function createRelay({ ttl = 1200000, path = '/socket.io' } = {}) {
   const app = express();
   const http = createServer(app);
   const io = new Server(http, { path, maxHttpBufferSize: 100000, serveClient: false });

@@ -10,7 +10,7 @@ FlyQR shares files and messages between two devices without an account. One devi
 - File transfers up to 100 MB, with progress and delivery confirmation
 - Direct WebRTC transfers with a Socket.IO relay fallback
 - Chat for short messages and links
-- Temporary rooms that expire after one hour
+- Temporary rooms that expire after 20 minutes
 - Shared rooms and automatic reconnection on Vercel with Redis
 
 ## Local development
@@ -66,7 +66,7 @@ Create a room from the public URL and join from a second device. Check messages,
 
 ### Room storage and reconnection
 
-Redis stores room membership, hashed resume tokens, expiry timestamps and rate-limit counters. Atomic Lua operations enforce the two-device limit. Room keys expire after one hour without relying on a running server timer.
+Redis stores room membership, hashed resume tokens, expiry timestamps and rate-limit counters. Atomic Lua operations enforce the two-device limit. Room keys expire after 20 minutes without relying on a running server timer.
 
 The Socket.IO Redis adapter forwards signaling, messages, file chunks and delivery acknowledgements between function instances. File payloads pass through Redis Pub/Sub in transit; they are not saved as Redis keys or written to disk by FlyQR.
 
