@@ -6,7 +6,12 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { RedisRooms } from './rooms.js';
 
 export async function createDistributedRelay({ url = process.env.REDIS_URL, prefix = 'flyqr:', ttl, rotateMs = 240000, path = '/api/relay/socket.io' } = {}) {
-  if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL before deploying FlyQR.');
+console.log('FlyQR Redis configuration:', {
+  redisUrlPresent: Boolean(process.env.REDIS_URL),
+  urlArgumentPresent: Boolean(url),
+  environment: process.env.VERCEL_ENV
+});  
+if (!url) throw new Error('Set REDIS_URL to a Redis TCP/TLS connection URL before deploying FlyQR.');
   const redis = createClient({ url, socket: { connectTimeout: 10000 }, disableOfflineQueue: true });
   const pub = redis.duplicate(), sub = redis.duplicate();
   const clients = [redis, pub, sub];
